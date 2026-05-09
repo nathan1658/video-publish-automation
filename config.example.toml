@@ -1,0 +1,47 @@
+[paths]
+# Folder where you will place videos before publishing.
+source_dir = "/Users/your-user/Movies/to_publish"
+
+# Use a mounted SMB share path, for example:
+#   macOS Finder: smb://server/share -> mounted under /Volumes/share
+#   destination_dir = "/Volumes/share/Videos"
+destination_dir = "/Volumes/your-smb-share/Videos"
+
+# Supported file extensions shown in the picker.
+extensions = [".mp4", ".mov", ".m4v", ".mkv", ".avi"]
+
+[behavior]
+# Keep this true for a rehearsal. It prints actions but does not copy, delete, or upload.
+dry_run = true
+
+# If true, delete the original after both SMB copy and YouTube upload succeed.
+# This makes the operation an actual move, but avoids deleting the only local copy
+# if either destination fails.
+delete_source_after_success = true
+
+# If a file with the same name exists in destination_dir:
+#   "fail"      -> stop
+#   "timestamp" -> append a timestamp to the destination filename
+on_destination_conflict = "timestamp"
+
+[youtube]
+# OAuth client secrets JSON downloaded from Google Cloud Console.
+# Create an OAuth Desktop app with YouTube Data API v3 enabled.
+client_secrets_file = "./client_secret.json"
+
+# Local token cache. Delete this file if you want to re-authenticate.
+token_file = "./token.json"
+
+# YouTube privacyStatus values: "private", "unlisted", or "public".
+# You wrote "不公開"; this config defaults to "private". Change to "unlisted"
+# if you mean "anyone with the link can view".
+privacy_status = "private"
+
+# Optional. Leave blank to skip playlist insertion.
+playlist_id = ""
+
+# Default metadata. The filename without extension is used when title is empty.
+title = ""
+description = ""
+tags = []
+category_id = "22"

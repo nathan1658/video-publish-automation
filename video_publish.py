@@ -6,7 +6,6 @@ import concurrent.futures
 import datetime as dt
 import json
 import mimetypes
-import os
 import shutil
 import sys
 from pathlib import Path
@@ -96,6 +95,8 @@ def resolve_destination(source: Path, destination_dir: Path, conflict_mode: str)
     destination = destination_dir / source.name
     if not destination.exists():
         return destination
+    if destination.stat().st_size == source.stat().st_size:
+        return destination
     if conflict_mode == "fail":
         raise FileExistsError(f"Destination file already exists: {destination}")
 
@@ -108,9 +109,13 @@ def copy_with_progress(source: Path, destination: Path, dry_run: bool) -> Path:
         print(f"[dry-run] Would copy to SMB destination: {destination}")
         return destination
 
+    if destination.exists() and destination.stat().st_size == source.stat().st_size:
+        print(f"SMB destination already exists with matching size, skipping copy: {destination}")
+        return destination
+
     destination.parent.mkdir(parents=True, exist_ok=True)
     total = source.stat().st_size
-    tmp_destination = destination.with_name(f".{destination.name}.partial")
+    tmp_destination = destination.with_name(f"{destination.name}.partial")
 
     with source.open("rb") as src, tmp_destination.open("wb") as dst:
         with tqdm(
@@ -128,7 +133,6 @@ def copy_with_progress(source: Path, destination: Path, dry_run: bool) -> Path:
                 dst.write(chunk)
                 bar.update(len(chunk))
 
-    shutil.copystat(source, tmp_destination)
     tmp_destination.replace(destination)
     return destination
 
@@ -146,11 +150,40 @@ def youtube_service(client_secrets_file: Path, token_file: Path, dry_run: bool):
 
     if not credentials or not credentials.valid:
         flow = InstalledAppFlow.from_client_secrets_file(str(client_secrets_file), SCOPES)
-        credentials = flow.run_local_server(port=0)
+        credentials = flow.run_local_server(
+            port=0,
+            prompt="consent select_account",
+            access_type="offline",
+        )
 
     token_file.parent.mkdir(parents=True, exist_ok=True)
     token_file.write_text(credentials.to_json())
     return build("youtube", "v3", credentials=credentials)
+
+
+def validate_youtube_destination(service, playlist_id: str | None) -> None:
+    if not playlist_id:
+        return
+
+    channels = service.channels().list(part="snippet", mine=True).execute().get("items", [])
+    channel_ids = {channel["id"] for channel in channels}
+    channel_names = ", ".join(channel["snippet"].get("title", channel["id"]) for channel in channels)
+
+    playlists = service.playlists().list(part="snippet", id=playlist_id).execute().get("items", [])
+    if not playlists:
+        raise ConfigError(f"YouTube playlist not found or not visible to this OAuth account: {playlist_id}")
+
+    playlist = playlists[0]
+    owner_channel_id = playlist["snippet"].get("channelId")
+    owner_title = playlist["snippet"].get("channelTitle", owner_channel_id)
+    if owner_channel_id not in channel_ids:
+        raise ConfigError(
+            "Configured playlist belongs to a different YouTube channel. "
+            f"Authenticated channel(s): {channel_names or 'none'}; "
+            f"playlist owner: {owner_title} ({owner_channel_id}). "
+            "Delete token.json and authorize the Google/YouTube channel that owns the playlist, "
+            "or use a playlist owned by the authenticated channel."
+        )
 
 
 def upload_to_youtube(source: Path, config: dict[str, Any], dry_run: bool) -> str | None:
@@ -172,6 +205,7 @@ def upload_to_youtube(source: Path, config: dict[str, Any], dry_run: bool) -> st
         Path(yt_config["token_file"]).expanduser(),
         dry_run=False,
     )
+    validate_youtube_destination(service, yt_config.get("playlist_id"))
     mimetype = mimetypes.guess_type(source.name)[0] or "video/*"
     body = {
         "snippet": {

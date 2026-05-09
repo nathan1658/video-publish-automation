@@ -35,6 +35,7 @@ This script lets you pick one video from a configured folder, copy it to a mount
    - Create an OAuth client for a **Desktop app**.
    - Download the client JSON as `client_secret.json` into this folder, or update `youtube.client_secrets_file`.
    - The script requests YouTube upload access plus playlist-edit access so it can add the uploaded video to your configured playlist.
+   - If the upload account and playlist owner are different Google/YouTube accounts, set `youtube.playlist_token_file` to a second token path. The script will upload with `token_file` and add to the playlist with `playlist_token_file`.
 
 5. Turn off dry run when ready:
 
@@ -52,6 +53,12 @@ python video_publish.py --config config.toml
 ```
 
 The first YouTube upload opens a browser for OAuth consent. After that, `token.json` is reused.
+
+To add an already-uploaded video to the configured playlist without uploading again:
+
+```bash
+python video_publish.py --config config.toml --add-existing-video VIDEO_ID
+```
 
 ## Notes
 

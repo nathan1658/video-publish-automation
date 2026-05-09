@@ -64,6 +64,10 @@ def validate_config(config: dict[str, Any]) -> None:
     if conflict not in {"fail", "timestamp"}:
         raise ConfigError("behavior.on_destination_conflict must be fail or timestamp")
 
+    yt_config = config["youtube"]
+    if yt_config.get("playlist_token_file") and not yt_config.get("playlist_id"):
+        raise ConfigError("youtube.playlist_token_file is only useful when youtube.playlist_id is set")
+
 
 def list_videos(source_dir: Path, extensions: list[str]) -> list[Path]:
     normalized = {ext.lower() if ext.startswith(".") else f".{ext.lower()}" for ext in extensions}
@@ -186,6 +190,22 @@ def validate_youtube_destination(service, playlist_id: str | None) -> None:
         )
 
 
+def playlist_service(config: dict[str, Any], dry_run: bool):
+    yt_config = config["youtube"]
+    if not yt_config.get("playlist_id") or dry_run:
+        return None
+
+    client_secrets_file = Path(
+        yt_config.get("playlist_client_secrets_file")
+        or yt_config["client_secrets_file"]
+    ).expanduser()
+    token_file = Path(
+        yt_config.get("playlist_token_file")
+        or yt_config["token_file"]
+    ).expanduser()
+    return youtube_service(client_secrets_file, token_file, dry_run=False)
+
+
 def upload_to_youtube(source: Path, config: dict[str, Any], dry_run: bool) -> str | None:
     yt_config = config["youtube"]
     privacy = yt_config.get("privacy_status", "private")
@@ -197,7 +217,11 @@ def upload_to_youtube(source: Path, config: dict[str, Any], dry_run: bool) -> st
     if dry_run:
         print(f"[dry-run] Would upload to YouTube: title={title!r}, privacy={privacy!r}")
         if yt_config.get("playlist_id"):
-            print(f"[dry-run] Would add uploaded video to playlist: {yt_config['playlist_id']}")
+            playlist_token = yt_config.get("playlist_token_file") or yt_config.get("token_file")
+            print(
+                "[dry-run] Would add uploaded video to playlist: "
+                f"{yt_config['playlist_id']} using token {playlist_token}"
+            )
         return "dry-run-video-id"
 
     service = youtube_service(
@@ -205,7 +229,8 @@ def upload_to_youtube(source: Path, config: dict[str, Any], dry_run: bool) -> st
         Path(yt_config["token_file"]).expanduser(),
         dry_run=False,
     )
-    validate_youtube_destination(service, yt_config.get("playlist_id"))
+    playlist = playlist_service(config, dry_run=False)
+    validate_youtube_destination(playlist, yt_config.get("playlist_id"))
     mimetype = mimetypes.guess_type(source.name)[0] or "video/*"
     body = {
         "snippet": {
@@ -236,7 +261,7 @@ def upload_to_youtube(source: Path, config: dict[str, Any], dry_run: bool) -> st
     video_id = response["id"]
     playlist_id = yt_config.get("playlist_id")
     if playlist_id:
-        service.playlistItems().insert(
+        playlist.playlistItems().insert(
             part="snippet",
             body={
                 "snippet": {
@@ -253,9 +278,51 @@ def upload_to_youtube(source: Path, config: dict[str, Any], dry_run: bool) -> st
     return video_id
 
 
+def add_existing_video_to_playlist(config: dict[str, Any], video_id: str, dry_run: bool) -> None:
+    yt_config = config["youtube"]
+    playlist_id = yt_config.get("playlist_id")
+    if not playlist_id:
+        raise ConfigError("youtube.playlist_id is required when using --add-existing-video")
+
+    if dry_run:
+        playlist_token = yt_config.get("playlist_token_file") or yt_config.get("token_file")
+        print(f"[dry-run] Would add video {video_id} to playlist {playlist_id} using token {playlist_token}")
+        return
+
+    service = playlist_service(config, dry_run=False)
+    validate_youtube_destination(service, playlist_id)
+
+    existing = service.playlistItems().list(
+        part="contentDetails",
+        playlistId=playlist_id,
+        maxResults=50,
+    ).execute()
+    if any(item["contentDetails"].get("videoId") == video_id for item in existing.get("items", [])):
+        print(f"Video already exists in playlist: {video_id}")
+        return
+
+    response = service.playlistItems().insert(
+        part="snippet",
+        body={
+            "snippet": {
+                "playlistId": playlist_id,
+                "resourceId": {
+                    "kind": "youtube#video",
+                    "videoId": video_id,
+                },
+            }
+        },
+    ).execute()
+    print(f"Added existing video to playlist: video={video_id}, playlistItem={response.get('id')}")
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="Move a picked video to SMB and upload it to YouTube.")
     parser.add_argument("--config", default="config.toml", help="Path to TOML config file.")
+    parser.add_argument(
+        "--add-existing-video",
+        help="Add an existing YouTube video ID to youtube.playlist_id using the playlist OAuth token.",
+    )
     args = parser.parse_args()
 
     try:
@@ -264,6 +331,10 @@ def main() -> int:
         paths = config["paths"]
         behavior = config.get("behavior", {})
         dry_run = bool(behavior.get("dry_run", True))
+
+        if args.add_existing_video:
+            add_existing_video_to_playlist(config, args.add_existing_video, dry_run)
+            return 0
 
         source_dir = Path(paths["source_dir"]).expanduser()
         destination_dir = Path(paths["destination_dir"]).expanduser()

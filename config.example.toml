@@ -32,6 +32,14 @@ client_secrets_file = "./client_secret.json"
 # Local token cache. Delete this file if you want to re-authenticate.
 token_file = "./token.json"
 
+# Optional separate OAuth token for adding the uploaded video to a playlist owned
+# by a different Google/YouTube account. When omitted, token_file is used.
+playlist_token_file = ""
+
+# Optional separate OAuth client secrets file for the playlist account.
+# When omitted, client_secrets_file is used.
+playlist_client_secrets_file = ""
+
 # YouTube privacyStatus values: "private", "unlisted", or "public".
 # You wrote "不公開"; this config defaults to "private". Change to "unlisted"
 # if you mean "anyone with the link can view".
